@@ -4,8 +4,9 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from typing import List, Dict, Optional
 import uvicorn
-from Bio.SeqUtils import GC, molecular_weight
+from Bio.SeqUtils import GC
 from Bio.SeqUtils.MeltingTemp import Tm_Wallace
+from Bio.SeqUtils import molecular_weight  # Correct import
 from Bio.Seq import Seq
 from Bio import SeqIO
 from Bio.Restriction import RestrictionBatch, Analysis
@@ -167,7 +168,7 @@ async def analyze_sequence(request: SequenceAnalysisRequest):
                 results['gc_content'] = GC(seq_obj)
             
             elif analysis == "Molecular Weight":
-                results['molecular_weight'] = molecular_weight(seq_obj, request.sequence_type == "DNA")
+                results['molecular_weight'] = molecular_weight(seq_obj, circular=request.circular)
             
             elif analysis == "Sequence Length":
                 results['sequence_length'] = len(seq_obj)
