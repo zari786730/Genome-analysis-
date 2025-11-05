@@ -4,7 +4,8 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from typing import List, Dict, Optional
 import uvicorn
-from Bio.SeqUtils import GC, molecular_weight, MeltingTemp
+from Bio.SeqUtils import GC, molecular_weight
+from Bio.SeqUtils.MeltingTemp import Tm_Wallace  # Fixed import
 from Bio.Seq import Seq
 from Bio import SeqIO
 from Bio.Restriction import RestrictionBatch, Analysis
@@ -95,7 +96,7 @@ async def analyze_sequence(request: SequenceAnalysisRequest):
                 results['reverse_complement'] = str(seq_obj.reverse_complement())
             
             elif analysis == "Melting Temperature":
-                results['melting_temperature'] = MeltingTemp.Tm_Wallace(seq_obj)
+                results['melting_temperature'] = Tm_Wallace(seq_obj)  # Fixed function call
             
             elif analysis == "Translation":
                 if request.sequence_type == "DNA":
