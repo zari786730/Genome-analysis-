@@ -14,6 +14,7 @@ import io
 import json
 from datetime import datetime
 
+# Initialize FastAPI app
 app = FastAPI(
     title="Genomic Analysis API",
     description="A comprehensive DNA/RNA sequence analysis API",
@@ -48,6 +49,91 @@ class AdvancedAnalysisRequest(BaseModel):
     analysis_type: str
     parameters: Optional[Dict] = {}
 
+# Utility functions
+def find_restriction_sites(sequence: Seq) -> Dict:
+    """Find restriction enzyme cutting sites"""
+    try:
+        enzymes = ['EcoRI', 'BamHI', 'HindIII', 'XbaI', 'NotI', 'SacI', 'KpnI', 'PstI', 'SmaI']
+        rb = RestrictionBatch(enzymes)
+        analysis = Analysis(rb, sequence)
+        results = {}
+        
+        for enzyme in enzymes:
+            sites = analysis.with_sites(enzyme)
+            if sites:
+                results[enzyme] = list(sites)
+        
+        return results
+    except Exception as e:
+        return {"error": str(e)}
+
+def find_orfs(sequence: Seq, min_length: int = 50) -> List[Dict]:
+    """Find Open Reading Frames"""
+    orfs = []
+    
+    for strand, nuc in [(+1, sequence), (-1, sequence.reverse_complement())]:
+        for frame in range(3):
+            length = 3 * ((len(nuc) - frame) // 3)
+            translated = nuc[frame:frame+length].translate()
+            
+            proteins = translated.split("*")
+            
+            start_pos = 0
+            for pro in proteins:
+                if len(pro) >= min_length // 3:
+                    if 'M' in pro:
+                        start_index = pro.index('M')
+                        actual_pro = pro[start_index:]
+                        if len(actual_pro) >= min_length // 3:
+                            orfs.append({
+                                "start": frame + (start_pos + start_index) * 3 + 1,
+                                "length": len(actual_pro) * 3,
+                                "sequence": str(actual_pro),
+                                "strand": "forward" if strand == 1 else "reverse"
+                            })
+                start_pos += len(pro) + 1
+    
+    orfs.sort(key=lambda x: x['length'], reverse=True)
+    return orfs[:10]
+
+def calculate_gc_skew(sequence: Seq, window: int = 100) -> List[float]:
+    """Calculate GC skew across the sequence"""
+    gc_skew = []
+    
+    for i in range(0, len(sequence) - window + 1, window):
+        window_seq = sequence[i:i + window]
+        g_count = window_seq.count('G')
+        c_count = window_seq.count('C')
+        
+        if g_count + c_count > 0:
+            skew = (g_count - c_count) / (g_count + c_count)
+        else:
+            skew = 0.0
+        
+        gc_skew.append(skew)
+    
+    return gc_skew
+
+def calculate_codon_usage(sequence: Seq) -> Dict[str, float]:
+    """Calculate codon usage frequencies"""
+    codon_counts = {}
+    total_codons = 0
+    
+    for frame in range(3):
+        for i in range(frame, len(sequence) - 2, 3):
+            codon = str(sequence[i:i+3])
+            if len(codon) == 3 and all(nuc in 'ATCG' for nuc in codon):
+                codon_counts[codon] = codon_counts.get(codon, 0) + 1
+                total_codons += 1
+    
+    if total_codons > 0:
+        codon_freq = {codon: count/total_codons for codon, count in codon_counts.items()}
+    else:
+        codon_freq = {}
+    
+    return codon_freq
+
+# API Routes
 @app.get("/")
 async def root():
     return {
@@ -63,13 +149,12 @@ async def health_check():
 
 @app.post("/analyze/sequence")
 async def analyze_sequence(request: SequenceAnalysisRequest):
+    """Analyze DNA/RNA sequences for various properties"""
     try:
-        # Validate sequence
         sequence = request.sequence.upper().strip()
         if not all(c in 'ATCGNU ' for c in sequence):
             raise HTTPException(status_code=400, detail="Invalid sequence characters")
         
-        # Remove spaces and validate length
         clean_sequence = sequence.replace(' ', '')
         if len(clean_sequence) < 10:
             raise HTTPException(status_code=400, detail="Sequence too short (minimum 10 bp)")
@@ -77,7 +162,6 @@ async def analyze_sequence(request: SequenceAnalysisRequest):
         seq_obj = Seq(clean_sequence)
         results = {}
         
-        # Perform requested analyses
         for analysis in request.analyses:
             if analysis == "GC Content":
                 results['gc_content'] = GC(seq_obj)
@@ -123,27 +207,9 @@ async def analyze_sequence(request: SequenceAnalysisRequest):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Analysis error: {str(e)}")
 
-def find_restriction_sites(sequence: Seq) -> Dict:
-    """Find restriction enzyme cutting sites"""
-    try:
-        # Common restriction enzymes
-        enzymes = ['EcoRI', 'BamHI', 'HindIII', 'XbaI', 'NotI', 'SacI', 'KpnI', 'PstI', 'SmaI']
-        rb = RestrictionBatch(enzymes)
-        analysis = Analysis(rb, sequence)
-        results = {}
-        
-        for enzyme in enzymes:
-            sites = analysis.with_sites(enzyme)
-            if sites:
-                results[enzyme] = list(sites)
-        
-        return results
-    except Exception as e:
-        return {"error": str(e)}
-
 @app.post("/convert/format")
 async def convert_sequence_format(request: FileConversionRequest):
-    """Convert between sequence formats"""
+    """Convert between sequence formats (FASTA, GenBank)"""
     try:
         converted_sequences = []
         
@@ -155,7 +221,6 @@ async def convert_sequence_format(request: FileConversionRequest):
                     converted += f"DEFINITION  {record.description}\n"
                     converted += f"ORIGIN\n"
                     
-                    # Format sequence in blocks of 10
                     seq_str = str(record.seq)
                     for i in range(0, len(seq_str), 60):
                         block = seq_str[i:i+60]
@@ -184,7 +249,7 @@ async def convert_sequence_format(request: FileConversionRequest):
 
 @app.post("/analyze/advanced")
 async def advanced_analysis(request: AdvancedAnalysisRequest):
-    """Perform advanced genomic analyses"""
+    """Perform advanced genomic analyses (ORF finding, GC skew, codon usage)"""
     try:
         sequence = request.sequence.upper().strip()
         clean_sequence = sequence.replace(' ', '')
@@ -214,80 +279,9 @@ async def advanced_analysis(request: AdvancedAnalysisRequest):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Advanced analysis error: {str(e)}")
 
-def find_orfs(sequence: Seq, min_length: int = 50) -> List[Dict]:
-    """Find Open Reading Frames"""
-    orfs = []
-    
-    for strand, nuc in [(+1, sequence), (-1, sequence.reverse_complement())]:
-        for frame in range(3):
-            length = 3 * ((len(nuc) - frame) // 3)
-            translated = nuc[frame:frame+length].translate()
-            
-            # Split on stop codons (*)
-            proteins = translated.split("*")
-            
-            start_pos = 0
-            for pro in proteins:
-                if len(pro) >= min_length // 3:
-                    # Find start codon (M) in the protein
-                    if 'M' in pro:
-                        start_index = pro.index('M')
-                        actual_pro = pro[start_index:]
-                        if len(actual_pro) >= min_length // 3:
-                            orfs.append({
-                                "start": frame + (start_pos + start_index) * 3 + 1,
-                                "length": len(actual_pro) * 3,
-                                "sequence": str(actual_pro),
-                                "strand": "forward" if strand == 1 else "reverse"
-                            })
-                start_pos += len(pro) + 1  # +1 for the stop codon
-    
-    # Sort by length (longest first)
-    orfs.sort(key=lambda x: x['length'], reverse=True)
-    return orfs[:10]  # Return top 10 ORFs
-
-def calculate_gc_skew(sequence: Seq, window: int = 100) -> List[float]:
-    """Calculate GC skew across the sequence"""
-    gc_skew = []
-    
-    for i in range(0, len(sequence) - window + 1, window):
-        window_seq = sequence[i:i + window]
-        g_count = window_seq.count('G')
-        c_count = window_seq.count('C')
-        
-        if g_count + c_count > 0:
-            skew = (g_count - c_count) / (g_count + c_count)
-        else:
-            skew = 0.0
-        
-        gc_skew.append(skew)
-    
-    return gc_skew
-
-def calculate_codon_usage(sequence: Seq) -> Dict[str, float]:
-    """Calculate codon usage frequencies"""
-    codon_counts = {}
-    total_codons = 0
-    
-    # Count codons in all reading frames
-    for frame in range(3):
-        for i in range(frame, len(sequence) - 2, 3):
-            codon = str(sequence[i:i+3])
-            if len(codon) == 3 and all(nuc in 'ATCG' for nuc in codon):
-                codon_counts[codon] = codon_counts.get(codon, 0) + 1
-                total_codons += 1
-    
-    # Calculate frequencies
-    if total_codons > 0:
-        codon_freq = {codon: count/total_codons for codon, count in codon_counts.items()}
-    else:
-        codon_freq = {}
-    
-    return codon_freq
-
 @app.post("/upload/file")
 async def upload_sequence_file(file: UploadFile = File(...)):
-    """Upload and process sequence files"""
+    """Upload and process sequence files (FASTA, GenBank)"""
     try:
         content = await file.read()
         file_type = file.filename.split('.')[-1].lower()
@@ -329,6 +323,7 @@ async def upload_sequence_file(file: UploadFile = File(...)):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"File processing error: {str(e)}")
 
+# Main execution
 if __name__ == "__main__":
     uvicorn.run(
         "backend:app",
