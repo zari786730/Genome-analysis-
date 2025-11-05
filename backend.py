@@ -4,13 +4,6 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from typing import List, Dict, Optional
 import uvicorn
-from Bio.SeqUtils import GC
-from Bio.SeqUtils.MeltingTemp import Tm_Wallace
-from Bio.SeqUtils import molecular_weight as seq_molecular_weight  # Correct import with alias
-from Bio.Seq import Seq
-from Bio import SeqIO
-from Bio.Restriction import RestrictionBatch, Analysis
-from Bio.Data import CodonTable
 import io
 import json
 from datetime import datetime
@@ -50,76 +43,179 @@ class AdvancedAnalysisRequest(BaseModel):
     analysis_type: str
     parameters: Optional[Dict] = {}
 
-# Utility functions
-def calculate_sequence_molecular_weight(sequence: str, seq_type: str = "DNA") -> float:
-    """Calculate molecular weight for DNA or RNA sequences"""
-    try:
-        if seq_type == "DNA":
-            # Molecular weight calculation for DNA
-            weights = {'A': 331.2, 'T': 322.2, 'C': 307.2, 'G': 347.2}
-        else:  # RNA
-            weights = {'A': 347.2, 'U': 324.2, 'C': 323.2, 'G': 363.2}
-        
-        total_weight = 0.0
-        for nucleotide in sequence.upper():
-            if nucleotide in weights:
-                total_weight += weights[nucleotide]
-        
-        # Add water molecular weight for the chain
-        total_weight += 18.0 * (len(sequence) - 1)
-        
-        return round(total_weight, 2)
-    except:
+# Custom genomic analysis functions (no external dependencies)
+def calculate_gc_content(sequence: str) -> float:
+    """Calculate GC content percentage"""
+    sequence = sequence.upper()
+    gc_count = sequence.count('G') + sequence.count('C')
+    total_count = len(sequence)
+    
+    if total_count == 0:
         return 0.0
+    return round((gc_count / total_count) * 100, 2)
 
-def find_restriction_sites(sequence: Seq) -> Dict:
-    """Find restriction enzyme cutting sites"""
-    try:
-        enzymes = ['EcoRI', 'BamHI', 'HindIII', 'XbaI']
-        rb = RestrictionBatch(enzymes)
-        analysis = Analysis(rb, sequence)
-        results = {}
-        
-        for enzyme in enzymes:
-            sites = analysis.with_sites(enzyme)
-            if sites:
-                results[enzyme] = list(sites)
-        
-        return results
-    except Exception as e:
-        return {"error": "Restriction analysis not available"}
+def calculate_molecular_weight(sequence: str, seq_type: str = "DNA") -> float:
+    """Calculate molecular weight for DNA or RNA sequences"""
+    sequence = sequence.upper()
+    
+    if seq_type == "DNA":
+        # Molecular weights for DNA nucleotides (g/mol)
+        weights = {'A': 331.2, 'T': 322.2, 'C': 307.2, 'G': 347.2}
+    else:  # RNA
+        weights = {'A': 347.2, 'U': 324.2, 'C': 323.2, 'G': 363.2}
+    
+    total_weight = 0.0
+    valid_nucleotides = 0
+    
+    for nucleotide in sequence:
+        if nucleotide in weights:
+            total_weight += weights[nucleotide]
+            valid_nucleotides += 1
+    
+    # Add water molecular weight for the chain (18 g/mol per bond)
+    if valid_nucleotides > 1:
+        total_weight += 18.0 * (valid_nucleotides - 1)
+    
+    return round(total_weight, 2)
 
-def find_orfs(sequence: Seq, min_length: int = 50) -> List[Dict]:
+def get_reverse_complement(sequence: str, seq_type: str = "DNA") -> str:
+    """Get reverse complement of DNA/RNA sequence"""
+    sequence = sequence.upper()
+    
+    if seq_type == "DNA":
+        complement_map = {'A': 'T', 'T': 'A', 'C': 'G', 'G': 'C'}
+    else:  # RNA
+        complement_map = {'A': 'U', 'U': 'A', 'C': 'G', 'G': 'C'}
+    
+    complement = ''
+    for nucleotide in sequence:
+        complement += complement_map.get(nucleotide, nucleotide)
+    
+    return complement[::-1]  # Reverse the complement
+
+def calculate_melting_temperature(sequence: str) -> float:
+    """Calculate melting temperature using Wallace rule"""
+    sequence = sequence.upper()
+    gc_count = sequence.count('G') + sequence.count('C')
+    return round(2 * gc_count + 4 * (len(sequence) - gc_count), 2)
+
+def translate_dna_to_protein(sequence: str) -> str:
+    """Translate DNA sequence to protein"""
+    sequence = sequence.upper()
+    
+    # Standard genetic code
+    codon_table = {
+        'ATA':'I', 'ATC':'I', 'ATT':'I', 'ATG':'M',
+        'ACA':'T', 'ACC':'T', 'ACG':'T', 'ACT':'T',
+        'AAC':'N', 'AAT':'N', 'AAA':'K', 'AAG':'K',
+        'AGC':'S', 'AGT':'S', 'AGA':'R', 'AGG':'R',
+        'CTA':'L', 'CTC':'L', 'CTG':'L', 'CTT':'L',
+        'CCA':'P', 'CCC':'P', 'CCG':'P', 'CCT':'P',
+        'CAC':'H', 'CAT':'H', 'CAA':'Q', 'CAG':'Q',
+        'CGA':'R', 'CGC':'R', 'CGG':'R', 'CGT':'R',
+        'GTA':'V', 'GTC':'V', 'GTG':'V', 'GTT':'V',
+        'GCA':'A', 'GCC':'A', 'GCG':'A', 'GCT':'A',
+        'GAC':'D', 'GAT':'D', 'GAA':'E', 'GAG':'E',
+        'GGA':'G', 'GGC':'G', 'GGG':'G', 'GGT':'G',
+        'TCA':'S', 'TCC':'S', 'TCG':'S', 'TCT':'S',
+        'TTC':'F', 'TTT':'F', 'TTA':'L', 'TTG':'L',
+        'TAC':'Y', 'TAT':'Y', 'TAA':'*', 'TAG':'*',
+        'TGC':'C', 'TGT':'C', 'TGA':'*', 'TGG':'W'
+    }
+    
+    protein = ''
+    for i in range(0, len(sequence) - 2, 3):
+        codon = sequence[i:i+3]
+        if len(codon) == 3:
+            protein += codon_table.get(codon, 'X')
+    
+    return protein
+
+def find_restriction_sites(sequence: str) -> Dict:
+    """Find common restriction enzyme cutting sites"""
+    sequence = sequence.upper()
+    
+    restriction_enzymes = {
+        'EcoRI': 'GAATTC',
+        'BamHI': 'GGATCC',
+        'HindIII': 'AAGCTT',
+        'XbaI': 'TCTAGA',
+        'NotI': 'GCGGCCGC',
+        'SacI': 'GAGCTC',
+        'KpnI': 'GGTACC',
+        'PstI': 'CTGCAG',
+        'SmaI': 'CCCGGG'
+    }
+    
+    sites_found = {}
+    
+    for enzyme, site in restriction_enzymes.items():
+        positions = []
+        start = 0
+        while start < len(sequence):
+            pos = sequence.find(site, start)
+            if pos == -1:
+                break
+            positions.append(pos + 1)  # Convert to 1-based indexing
+            start = pos + 1
+        
+        if positions:
+            sites_found[enzyme] = positions
+    
+    return sites_found
+
+def find_orfs(sequence: str, min_length: int = 50) -> List[Dict]:
     """Find Open Reading Frames"""
+    sequence = sequence.upper()
     orfs = []
     
-    for strand, nuc in [(+1, sequence), (-1, sequence.reverse_complement())]:
-        for frame in range(3):
-            length = 3 * ((len(nuc) - frame) // 3)
-            translated = nuc[frame:frame+length].translate()
-            
-            proteins = translated.split("*")
-            
-            start_pos = 0
-            for pro in proteins:
-                if len(pro) >= min_length // 3:
-                    if 'M' in pro:
-                        start_index = pro.index('M')
-                        actual_pro = pro[start_index:]
-                        if len(actual_pro) >= min_length // 3:
-                            orfs.append({
-                                "start": frame + (start_pos + start_index) * 3 + 1,
-                                "length": len(actual_pro) * 3,
-                                "sequence": str(actual_pro),
-                                "strand": "forward" if strand == 1 else "reverse"
-                            })
-                start_pos += len(pro) + 1
+    # Check all reading frames
+    for frame in range(3):
+        # Forward strand
+        protein = translate_dna_to_protein(sequence[frame:])
+        orfs.extend(_find_orfs_in_translation(protein, frame + 1, "forward", min_length))
+        
+        # Reverse complement strand
+        rev_comp = get_reverse_complement(sequence, "DNA")
+        rev_protein = translate_dna_to_protein(rev_comp[frame:])
+        orfs.extend(_find_orfs_in_translation(rev_protein, frame + 1, "reverse", min_length))
     
+    # Sort by length and return top 10
     orfs.sort(key=lambda x: x['length'], reverse=True)
     return orfs[:10]
 
-def calculate_gc_skew(sequence: Seq, window: int = 100) -> List[float]:
+def _find_orfs_in_translation(protein: str, frame: int, strand: str, min_length: int) -> List[Dict]:
+    """Helper function to find ORFs in translated sequence"""
+    orfs = []
+    start_pos = 0
+    
+    while start_pos < len(protein):
+        # Find start codon (M)
+        start_index = protein.find('M', start_pos)
+        if start_index == -1:
+            break
+        
+        # Find stop codon (*) after start
+        stop_index = protein.find('*', start_index)
+        if stop_index == -1:
+            stop_index = len(protein)
+        
+        orf_length = (stop_index - start_index) * 3
+        if orf_length >= min_length:
+            orfs.append({
+                "start": frame + (start_index * 3),
+                "length": orf_length,
+                "sequence": protein[start_index:stop_index],
+                "strand": strand
+            })
+        
+        start_pos = stop_index + 1
+    
+    return orfs
+
+def calculate_gc_skew(sequence: str, window: int = 100) -> List[float]:
     """Calculate GC skew across the sequence"""
+    sequence = sequence.upper()
     gc_skew = []
     
     for i in range(0, len(sequence) - window + 1, window):
@@ -132,28 +228,69 @@ def calculate_gc_skew(sequence: Seq, window: int = 100) -> List[float]:
         else:
             skew = 0.0
         
-        gc_skew.append(skew)
+        gc_skew.append(round(skew, 3))
     
     return gc_skew
 
-def calculate_codon_usage(sequence: Seq) -> Dict[str, float]:
+def calculate_codon_usage(sequence: str) -> Dict[str, float]:
     """Calculate codon usage frequencies"""
+    sequence = sequence.upper()
     codon_counts = {}
     total_codons = 0
     
-    for frame in range(3):
-        for i in range(frame, len(sequence) - 2, 3):
-            codon = str(sequence[i:i+3])
-            if len(codon) == 3 and all(nuc in 'ATCG' for nuc in codon):
-                codon_counts[codon] = codon_counts.get(codon, 0) + 1
-                total_codons += 1
+    for i in range(0, len(sequence) - 2, 3):
+        codon = sequence[i:i+3]
+        if len(codon) == 3 and all(nuc in 'ATCG' for nuc in codon):
+            codon_counts[codon] = codon_counts.get(codon, 0) + 1
+            total_codons += 1
     
     if total_codons > 0:
-        codon_freq = {codon: count/total_codons for codon, count in codon_counts.items()}
+        codon_freq = {codon: round(count/total_codons, 4) for codon, count in codon_counts.items()}
     else:
         codon_freq = {}
     
     return codon_freq
+
+def parse_fasta_content(content: str) -> List[Dict]:
+    """Parse FASTA format content"""
+    sequences = []
+    current_seq = ""
+    current_id = ""
+    current_desc = ""
+    
+    lines = content.split('\n')
+    
+    for line in lines:
+        line = line.strip()
+        if line.startswith('>'):
+            # Save previous sequence
+            if current_seq and current_id:
+                sequences.append({
+                    "id": current_id,
+                    "description": current_desc,
+                    "sequence": current_seq,
+                    "length": len(current_seq)
+                })
+            
+            # Start new sequence
+            header = line[1:].strip()
+            parts = header.split(' ', 1)
+            current_id = parts[0]
+            current_desc = parts[1] if len(parts) > 1 else ""
+            current_seq = ""
+        else:
+            current_seq += line
+    
+    # Add the last sequence
+    if current_seq and current_id:
+        sequences.append({
+            "id": current_id,
+            "description": current_desc,
+            "sequence": current_seq,
+            "length": len(current_seq)
+        })
+    
+    return sequences
 
 # API Routes
 @app.get("/")
@@ -181,46 +318,39 @@ async def analyze_sequence(request: SequenceAnalysisRequest):
         if len(clean_sequence) < 10:
             raise HTTPException(status_code=400, detail="Sequence too short (minimum 10 bp)")
         
-        seq_obj = Seq(clean_sequence)
         results = {}
         
         for analysis in request.analyses:
             if analysis == "GC Content":
-                results['gc_content'] = GC(seq_obj)
+                results['gc_content'] = calculate_gc_content(clean_sequence)
             
             elif analysis == "Molecular Weight":
-                results['molecular_weight'] = calculate_sequence_molecular_weight(clean_sequence, request.sequence_type)
+                results['molecular_weight'] = calculate_molecular_weight(clean_sequence, request.sequence_type)
             
             elif analysis == "Sequence Length":
-                results['sequence_length'] = len(seq_obj)
+                results['sequence_length'] = len(clean_sequence)
             
             elif analysis == "Nucleotide Frequency":
                 results['nucleotide_frequency'] = {
-                    'A': seq_obj.count('A'),
-                    'T': seq_obj.count('T'),
-                    'C': seq_obj.count('C'),
-                    'G': seq_obj.count('G'),
-                    'U': seq_obj.count('U') if request.sequence_type == "RNA" else 0
+                    'A': clean_sequence.count('A'),
+                    'T': clean_sequence.count('T'),
+                    'C': clean_sequence.count('C'),
+                    'G': clean_sequence.count('G'),
+                    'U': clean_sequence.count('U') if request.sequence_type == "RNA" else 0
                 }
             
             elif analysis == "Reverse Complement":
-                results['reverse_complement'] = str(seq_obj.reverse_complement())
+                results['reverse_complement'] = get_reverse_complement(clean_sequence, request.sequence_type)
             
             elif analysis == "Melting Temperature":
-                try:
-                    results['melting_temperature'] = Tm_Wallace(seq_obj)
-                except:
-                    results['melting_temperature'] = 0.0
+                results['melting_temperature'] = calculate_melting_temperature(clean_sequence)
             
             elif analysis == "Translation":
                 if request.sequence_type == "DNA":
-                    try:
-                        results['translation'] = str(seq_obj.translate(to_stop=True))
-                    except:
-                        results['translation'] = str(seq_obj.translate())
+                    results['translation'] = translate_dna_to_protein(clean_sequence)
             
             elif analysis == "Restriction Sites":
-                results['restriction_sites'] = find_restriction_sites(seq_obj)
+                results['restriction_sites'] = find_restriction_sites(clean_sequence)
         
         return JSONResponse(content=results)
     
@@ -231,33 +361,51 @@ async def analyze_sequence(request: SequenceAnalysisRequest):
 
 @app.post("/convert/format")
 async def convert_sequence_format(request: FileConversionRequest):
-    """Convert between sequence formats (FASTA, GenBank)"""
+    """Convert between sequence formats"""
     try:
         converted_sequences = []
         
         for seq in request.sequences:
             if request.input_format.upper() == "FASTA" and request.output_format.upper() == "GENBANK":
                 try:
-                    record = SeqIO.read(io.StringIO(seq), "fasta")
-                    converted = f"LOCUS       {record.id} {len(record.seq)} bp DNA\n"
-                    converted += f"DEFINITION  {record.description}\n"
-                    converted += f"ORIGIN\n"
-                    
-                    seq_str = str(record.seq)
-                    for i in range(0, len(seq_str), 60):
-                        block = seq_str[i:i+60]
-                        line_num = i + 1
-                        converted += f"{line_num:9} {block}\n"
-                    
-                    converted += "//"
-                    converted_sequences.append(converted)
+                    # Parse FASTA
+                    sequences = parse_fasta_content(seq)
+                    if sequences:
+                        record = sequences[0]
+                        converted = f"LOCUS       {record['id']} {record['length']} bp DNA\n"
+                        converted += f"DEFINITION  {record['description']}\n"
+                        converted += f"ORIGIN\n"
+                        
+                        seq_str = record['sequence']
+                        for i in range(0, len(seq_str), 60):
+                            block = seq_str[i:i+60]
+                            line_num = i + 1
+                            converted += f"{line_num:9} {block}\n"
+                        
+                        converted += "//"
+                        converted_sequences.append(converted)
                 except Exception as e:
                     converted_sequences.append(f"Error converting sequence: {str(e)}")
             
             elif request.input_format.upper() == "GENBANK" and request.output_format.upper() == "FASTA":
+                # Simple conversion - just extract sequence and create FASTA
                 try:
-                    record = SeqIO.read(io.StringIO(seq), "genbank")
-                    converted = f">{record.id} {record.description}\n{record.seq}"
+                    lines = seq.split('\n')
+                    sequence_data = ""
+                    in_origin = False
+                    
+                    for line in lines:
+                        if line.startswith("ORIGIN"):
+                            in_origin = True
+                            continue
+                        elif in_origin and line.startswith("//"):
+                            break
+                        elif in_origin:
+                            # Remove numbers and spaces
+                            sequence_part = ''.join([c for c in line if c in 'atcgATCG'])
+                            sequence_data += sequence_part
+                    
+                    converted = f">converted_sequence\n{sequence_data}"
                     converted_sequences.append(converted)
                 except Exception as e:
                     converted_sequences.append(f"Error converting sequence: {str(e)}")
@@ -271,7 +419,7 @@ async def convert_sequence_format(request: FileConversionRequest):
 
 @app.post("/analyze/advanced")
 async def advanced_analysis(request: AdvancedAnalysisRequest):
-    """Perform advanced genomic analyses (ORF finding, GC skew, codon usage)"""
+    """Perform advanced genomic analyses"""
     try:
         sequence = request.sequence.upper().strip()
         clean_sequence = sequence.replace(' ', '')
@@ -279,18 +427,17 @@ async def advanced_analysis(request: AdvancedAnalysisRequest):
         if len(clean_sequence) < 10:
             raise HTTPException(status_code=400, detail="Sequence too short for advanced analysis")
         
-        seq_obj = Seq(clean_sequence)
         results = {}
         
         if request.analysis_type == "orf_finder":
             min_length = request.parameters.get("min_length", 50) if request.parameters else 50
-            results['orfs'] = find_orfs(seq_obj, min_length)
+            results['orfs'] = find_orfs(clean_sequence, min_length)
         
         elif request.analysis_type == "gc_skew":
-            results['gc_skew'] = calculate_gc_skew(seq_obj)
+            results['gc_skew'] = calculate_gc_skew(clean_sequence)
         
         elif request.analysis_type == "codon_usage":
-            results['codon_usage'] = calculate_codon_usage(seq_obj)
+            results['codon_usage'] = calculate_codon_usage(clean_sequence)
         else:
             raise HTTPException(status_code=400, detail="Unsupported analysis type")
         
@@ -303,7 +450,7 @@ async def advanced_analysis(request: AdvancedAnalysisRequest):
 
 @app.post("/upload/file")
 async def upload_sequence_file(file: UploadFile = File(...)):
-    """Upload and process sequence files (FASTA, GenBank)"""
+    """Upload and process sequence files"""
     try:
         content = await file.read()
         file_type = file.filename.split('.')[-1].lower()
@@ -311,29 +458,10 @@ async def upload_sequence_file(file: UploadFile = File(...)):
         sequences = []
         
         if file_type in ['fasta', 'fa', 'fna']:
-            records = SeqIO.parse(io.StringIO(content.decode()), "fasta")
-            
-            for record in records:
-                sequences.append({
-                    "id": record.id,
-                    "description": record.description,
-                    "sequence": str(record.seq),
-                    "length": len(record.seq)
-                })
-        
-        elif file_type in ['gb', 'gbk', 'genbank']:
-            records = SeqIO.parse(io.StringIO(content.decode()), "genbank")
-            
-            for record in records:
-                sequences.append({
-                    "id": record.id,
-                    "description": record.description,
-                    "sequence": str(record.seq),
-                    "length": len(record.seq)
-                })
+            sequences = parse_fasta_content(content.decode())
         
         else:
-            raise HTTPException(status_code=400, detail="Unsupported file format")
+            raise HTTPException(status_code=400, detail="Unsupported file format. Only FASTA files are supported.")
         
         return {
             "filename": file.filename,
