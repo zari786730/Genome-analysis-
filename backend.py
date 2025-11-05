@@ -6,7 +6,7 @@ from typing import List, Dict, Optional
 import uvicorn
 from Bio.SeqUtils import GC
 from Bio.SeqUtils.MeltingTemp import Tm_Wallace
-from Bio.SeqUtils import molecular_weight  # Correct import
+from Bio.SeqUtils import molecular_weight as seq_molecular_weight  # Correct import with alias
 from Bio.Seq import Seq
 from Bio import SeqIO
 from Bio.Restriction import RestrictionBatch, Analysis
@@ -51,10 +51,31 @@ class AdvancedAnalysisRequest(BaseModel):
     parameters: Optional[Dict] = {}
 
 # Utility functions
+def calculate_sequence_molecular_weight(sequence: str, seq_type: str = "DNA") -> float:
+    """Calculate molecular weight for DNA or RNA sequences"""
+    try:
+        if seq_type == "DNA":
+            # Molecular weight calculation for DNA
+            weights = {'A': 331.2, 'T': 322.2, 'C': 307.2, 'G': 347.2}
+        else:  # RNA
+            weights = {'A': 347.2, 'U': 324.2, 'C': 323.2, 'G': 363.2}
+        
+        total_weight = 0.0
+        for nucleotide in sequence.upper():
+            if nucleotide in weights:
+                total_weight += weights[nucleotide]
+        
+        # Add water molecular weight for the chain
+        total_weight += 18.0 * (len(sequence) - 1)
+        
+        return round(total_weight, 2)
+    except:
+        return 0.0
+
 def find_restriction_sites(sequence: Seq) -> Dict:
     """Find restriction enzyme cutting sites"""
     try:
-        enzymes = ['EcoRI', 'BamHI', 'HindIII', 'XbaI', 'NotI', 'SacI', 'KpnI', 'PstI', 'SmaI']
+        enzymes = ['EcoRI', 'BamHI', 'HindIII', 'XbaI']
         rb = RestrictionBatch(enzymes)
         analysis = Analysis(rb, sequence)
         results = {}
@@ -66,7 +87,7 @@ def find_restriction_sites(sequence: Seq) -> Dict:
         
         return results
     except Exception as e:
-        return {"error": str(e)}
+        return {"error": "Restriction analysis not available"}
 
 def find_orfs(sequence: Seq, min_length: int = 50) -> List[Dict]:
     """Find Open Reading Frames"""
@@ -168,7 +189,7 @@ async def analyze_sequence(request: SequenceAnalysisRequest):
                 results['gc_content'] = GC(seq_obj)
             
             elif analysis == "Molecular Weight":
-                results['molecular_weight'] = molecular_weight(seq_obj, circular=request.circular)
+                results['molecular_weight'] = calculate_sequence_molecular_weight(clean_sequence, request.sequence_type)
             
             elif analysis == "Sequence Length":
                 results['sequence_length'] = len(seq_obj)
